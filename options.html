@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Requestly Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="container">
+        <div class="header-actions">
+            <h2>Request Forwarding Rules</h2>
+            <button id="addRuleBtn" class="btn-add">
+                <span>+</span> Add Rule
+            </button>
+        </div>
+
+        <div id="rulesList" class="rules-container">
+            <!-- Cards will be injected here -->
+        </div>
+
+        <div id="emptyState" class="empty-state">
+            No rules yet. Click "Add Rule" to filter your first request.
+        </div>
+    </div>
+
+    <div id="toast" class="status-toast">Saved</div>
+
+    <script src="options.js"></script>
+</body>
+
+</html>
