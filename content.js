@@ -20,25 +20,36 @@ window.addEventListener('message', function (event) {
 
     if (data.source === 'start-capture-extension') {
         // console.log("[RequestForwarder Content] Relaying capture to Background.");
-        chrome.runtime.sendMessage({
-            type: 'CAPTURED_REQUEST',
-            data: data.payload
-        });
+        try {
+            chrome.runtime.sendMessage({
+                source: 'start-capture-extension',
+                payload: data.payload
+            });
+        } catch (e) {
+            // Extension context invalidated (e.g. after reload/update)
+            // Silence the error or log it.
+            console.warn("[RequestForwarder] Extension context invalidated. Please reload the page.");
+        }
     }
     else if (data.source === 'request-extension-rules') {
-        syncRulesToPage(currentRules);
+        syncRulesToPage(currentRules, isExtensionEnabled);
     }
 });
 
-function syncRulesToPage(rules) {
+function syncRulesToPage(rules, isEnabled) {
     window.postMessage({
         source: 'extension-rules-sync',
-        rules: rules || []
+        rules: rules || [],
+        isExtensionEnabled: isEnabled !== false // Default True
     }, '*');
 }
 
+let isExtensionEnabled = true;
+
 // 1. Initial Load
-chrome.storage.local.get(['rules', 'webhookUrl', 'matchType', 'matchValue'], (items) => {
+chrome.storage.local.get(['rules', 'webhookUrl', 'matchType', 'matchValue', 'isExtensionEnabled'], (items) => {
+    isExtensionEnabled = items.isExtensionEnabled !== false;
+
     let rules = items.rules || [];
     if (rules.length === 0 && items.webhookUrl) {
         rules = [{
@@ -51,14 +62,25 @@ chrome.storage.local.get(['rules', 'webhookUrl', 'matchType', 'matchValue'], (it
     currentRules = rules;
     // We don't necessarily need to push it down immediately if we trust the handshake.
     // But let's do it anyway just in case injected loaded super fast.
-    syncRulesToPage(currentRules);
+    syncRulesToPage(currentRules, isExtensionEnabled);
 });
 
 // 2. Listen for changes
 chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'local' && changes.rules) {
-        currentRules = changes.rules.newValue;
-        console.log("[RequestForwarder Content] Rules changed. Syncing...");
-        syncRulesToPage(currentRules);
+    if (namespace === 'local') {
+        let shouldSync = false;
+        if (changes.rules) {
+            currentRules = changes.rules.newValue;
+            shouldSync = true;
+        }
+        if (changes.isExtensionEnabled) {
+            isExtensionEnabled = changes.isExtensionEnabled.newValue;
+            shouldSync = true;
+        }
+
+        if (shouldSync) {
+            console.log("[RequestForwarder Content] Settings changed. Syncing...");
+            syncRulesToPage(currentRules, isExtensionEnabled);
+        }
     }
 });

@@ -59,7 +59,34 @@ document.addEventListener('DOMContentLoaded', () => {
         delBtn.title = 'Delete Rule';
         delBtn.onclick = () => deleteRule(rule.id);
 
-        row1.append(methodGroup, delBtn);
+        // Toggle Switch
+        const toggleWrapper = document.createElement('label');
+        toggleWrapper.className = 'switch';
+        toggleWrapper.title = 'Enable/Disable Rule';
+
+        const toggleInput = document.createElement('input');
+        toggleInput.type = 'checkbox';
+        toggleInput.checked = rule.isActive !== false; // Default true if undefined
+        toggleInput.onchange = (e) => {
+            updateRule(rule.id, 'isActive', e.target.checked);
+            if (e.target.checked) {
+                card.classList.remove('inactive');
+            } else {
+                card.classList.add('inactive');
+            }
+        };
+
+        const toggleSlider = document.createElement('span');
+        toggleSlider.className = 'slider round';
+        toggleWrapper.appendChild(toggleInput);
+        toggleWrapper.appendChild(toggleSlider);
+
+        // Apply initial visual state
+        if (rule.isActive === false) {
+            card.classList.add('inactive');
+        }
+
+        row1.append(toggleWrapper, methodGroup, delBtn);
 
 
         // --- Row 2: Condition (Type + Source) ---
@@ -85,6 +112,51 @@ document.addEventListener('DOMContentLoaded', () => {
         inputSource.oninput = (e) => updateRule(rule.id, 'matchValue', e.target.value);
 
         row2.append(selectType, inputSource);
+
+
+        // --- Row 2.5: Capture Options ---
+        const rowOptions = document.createElement('div');
+        rowOptions.className = 'card-row';
+        rowOptions.style.marginTop = '-5px'; // Tighten up
+
+        const checkboxGroup = document.createElement('div');
+        checkboxGroup.className = 'checkbox-group';
+        checkboxGroup.style.marginLeft = '0'; // Current file style override
+
+        const opts = rule.captureOptions || {
+            queryParams: true,
+            requestBody: true,
+            requestHeaders: true,
+            responseHeaders: true,
+            responseBody: true
+        };
+
+        const createCheckbox = (label, key) => {
+            const lbl = document.createElement('label');
+            lbl.className = 'checkbox-label';
+
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = opts[key] !== false; // Default true
+            box.onchange = (e) => {
+                if (!rule.captureOptions) rule.captureOptions = { ...opts };
+                rule.captureOptions[key] = e.target.checked;
+                scheduleSave();
+            };
+
+            lbl.append(box, label);
+            return lbl;
+        };
+
+        checkboxGroup.append(
+            createCheckbox('Req Body', 'requestBody'),
+            createCheckbox('Res Body', 'responseBody'),
+            createCheckbox('Req Headers', 'requestHeaders'),
+            createCheckbox('Res Headers', 'responseHeaders'),
+            createCheckbox('Query Params', 'queryParams')
+        );
+
+        rowOptions.appendChild(checkboxGroup);
 
 
         // --- Row 3: Action (Action Type + Target) ---
@@ -113,7 +185,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         row3.append(selectAction, inputWebhook);
 
-        card.append(row1, row2, row3);
+        row3.append(selectAction, inputWebhook);
+
+        card.append(row1, row2, rowOptions, row3);
         rulesList.appendChild(card);
     }
 
@@ -167,11 +241,19 @@ document.addEventListener('DOMContentLoaded', () => {
     addRuleBtn.onclick = () => {
         const newRule = {
             id: Date.now(),
+            isActive: true, // Default ON
             matchType: 'contains',
             matchValue: '',
             webhookUrl: '',
             methods: [...DEFAULT_METHODS],
-            actionType: 'forward'
+            actionType: 'forward',
+            captureOptions: {
+                queryParams: true,
+                requestBody: true,
+                requestHeaders: true,
+                responseHeaders: true,
+                responseBody: true
+            }
         };
         rules.push(newRule);
         emptyState.style.display = 'none';
