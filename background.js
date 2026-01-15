@@ -6,13 +6,16 @@ let rules = [];
 chrome.storage.local.get(['rules', 'webhookUrl', 'matchType', 'matchValue'], (items) => {
     if (items.rules) {
         rules = items.rules;
+        console.log("Background: Loaded rules from storage:", rules.length);
     } else if (items.webhookUrl) {
-        // Migration for in-memory if user hasn't opened popup yet
+        // Migration
         rules = [{
             webhookUrl: items.webhookUrl,
             matchType: items.matchType || 'contains',
-            matchValue: items.matchValue || ''
+            matchValue: items.matchValue || '',
+            methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
         }];
+        console.log("Background: Migrated legacy rules");
     }
 });
 
@@ -21,6 +24,7 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local') {
         if (changes.rules) {
             rules = changes.rules.newValue;
+            console.log("Background: Rules updated:", rules);
         }
     }
 });
@@ -32,18 +36,21 @@ function isMatch(url, method, rule) {
 
     // Check Method (if defined in rule)
     if (rule.methods && rule.methods.length > 0) {
-        // Method from captured data is usually uppercase, but let's be safe
         const reqMethod = (method || 'GET').toUpperCase();
         if (!rule.methods.includes(reqMethod)) {
             return false;
         }
     }
 
+    // Use Trim to be safe (consistent with injected.js)
+    const matchVal = rule.matchValue.trim();
+    if (!matchVal) return false;
+
     if (rule.matchType === 'exact') {
-        return url === rule.matchValue;
+        return url === matchVal;
     } else {
         // contains
-        return url.includes(rule.matchValue);
+        return url.includes(matchVal);
     }
 }
 
@@ -51,12 +58,19 @@ function isMatch(url, method, rule) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'CAPTURED_REQUEST') {
         const data = message.data;
+        console.log("Background: Received captured request:", data.url, data.method);
+
         // Verify URL Match against ALL rules
         const urlToCheck = data.finalUrl || data.url;
         const methodToCheck = data.method;
 
+        let matched = false;
+
         rules.forEach(rule => {
             if (isMatch(urlToCheck, methodToCheck, rule)) {
+                matched = true;
+                console.log("Background: Matched rule:", rule.matchValue, "Forwarding to:", rule.webhookUrl);
+
                 // Forward to Webhook for this rule
                 sendToWebhook({
                     ...data,
@@ -65,6 +79,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 }, rule.webhookUrl);
             }
         });
+
+        if (!matched) {
+            console.log("Background: Request received but matched NO rules (Check sync/logic?):", urlToCheck);
+        }
     }
 });
 
@@ -72,15 +90,15 @@ async function sendToWebhook(payload, webhookUrl) {
     if (!webhookUrl) return;
 
     try {
-        await fetch(webhookUrl, {
+        const response = await fetch(webhookUrl, {
             method: "POST", // Force POST
             headers: {
                 "Content-Type": "application/json"
             },
             body: JSON.stringify(payload)
         });
-        console.log(`Forwarded request [${payload.url}] to [${webhookUrl}]`);
+        console.log(`Background: Forwarded [${payload.url}] -> [${webhookUrl}]. Status: ${response.status}`);
     } catch (err) {
-        console.error("Failed to forward request to webhook:", err);
+        console.error("Background: Failed to forward request to webhook:", err);
     }
 }

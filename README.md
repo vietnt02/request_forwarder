@@ -1,4 +1,4 @@
-# Custom Requestly - Webhook Forwarder Extension (v9 - Zero Latency)
+# Request Forwarder - Webhook Extension (v9 - Zero Latency)
 
 Extension mạnh mẽ giúp bắt (capture) và forward toàn bộ thông tin network request (bao gồm **Response Body**) từ trình duyệt đến nhiều Webhook Server.
 
