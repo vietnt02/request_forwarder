@@ -77,11 +77,20 @@
     XHR.open = function (method, url) {
         this._method = method;
         this._resolvedUrl = resolveUrl(url);
-        this._matchedRule = checkMatch(this._resolvedUrl, method); // Now returns Rule or Null
+        this._matchedRule = checkMatch(this._resolvedUrl, method);
         this._shouldCapture = !!this._matchedRule;
         this._requestHeaders = {};
         this._startTime = Date.now();
-        return open.apply(this, arguments);
+        this._correlationId = 'req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+        const result = open.apply(this, arguments);
+
+        // Automatically inject correlation ID if we should capture
+        if (this._shouldCapture) {
+            this.setRequestHeader('X-Request-Forwarder-Id', this._correlationId);
+        }
+
+        return result;
     };
 
     XHR.setRequestHeader = function (header, value) {
@@ -138,11 +147,10 @@
                     ruleId: this._matchedRule.id, // Pass ID
                     requestHeaders: this._requestHeaders, // Already filtered in setRequestHeader
                     requestBody: finalRequestBody,
-                    responseHeaders: responseHeaders,
                     responseBody: responseBody,
                     status: this.status,
                     timestamp: this._startTime,
-                    // Optional: remove query params if opts.queryParams === false.
+                    correlationId: this._correlationId
                 };
                 window.postMessage({ source: 'start-capture-extension', payload: data }, '*');
             });
@@ -174,6 +182,23 @@
         const resolvedUrl = resolveUrl(url);
         const matchedRule = checkMatch(resolvedUrl, method);
         const shouldCap = !!matchedRule;
+        const correlationId = 'req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+        if (shouldCap) {
+            // Ensure headers object exists and add ID
+            if (!config) config = {};
+            if (!config.headers) {
+                config.headers = {};
+            }
+
+            if (config.headers instanceof Headers) {
+                config.headers.append('X-Request-Forwarder-Id', correlationId);
+            } else if (Array.isArray(config.headers)) {
+                config.headers.push(['X-Request-Forwarder-Id', correlationId]);
+            } else {
+                config.headers['X-Request-Forwarder-Id'] = correlationId;
+            }
+        }
 
         return originalFetch.apply(this, args).then(async (response) => {
             if (!shouldCap) {
@@ -195,8 +220,22 @@
                 responseBody = null; // Ignored
             }
 
-            const reqHeaders = (opts.requestHeaders !== false && config) ? config.headers : {};
-            const reqBody = (opts.requestBody !== false && config) ? config.body : null;
+            let reqHeaders = {};
+            if (opts.requestHeaders !== false) {
+                if (config && config.headers) {
+                    if (config.headers instanceof Headers) {
+                        config.headers.forEach((v, k) => reqHeaders[k] = v);
+                    } else if (Array.isArray(config.headers)) {
+                        config.headers.forEach(([k, v]) => reqHeaders[k] = v);
+                    } else {
+                        reqHeaders = config.headers;
+                    }
+                } else if (resource instanceof Request) {
+                    resource.headers.forEach((v, k) => reqHeaders[k] = v);
+                }
+            }
+
+            const reqBody = (opts.requestBody !== false && config) ? config.body : (resource instanceof Request ? resource.body : null);
 
             // Capture Response Headers?
             let responseHeaders = {};
@@ -216,7 +255,8 @@
                 responseHeaders: responseHeaders,
                 responseBody: responseBody,
                 status: response.status,
-                timestamp: startTime
+                timestamp: startTime,
+                correlationId: correlationId
             };
 
             window.postMessage({ source: 'start-capture-extension', payload: data }, '*');

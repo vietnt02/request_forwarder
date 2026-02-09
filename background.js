@@ -76,94 +76,108 @@ function isMatch(url, method, rule) {
     }
 }
 
+// --- Network Header Capture (Robust Matching via Correlation ID) ---
+const correlationCache = new Map();
+
+chrome.webRequest.onBeforeSendHeaders.addListener(
+    (details) => {
+        let correlationId = null;
+        const headers = {};
+
+        if (details.requestHeaders) {
+            details.requestHeaders.forEach(h => {
+                headers[h.name] = h.value;
+                if (h.name.toLowerCase() === 'x-request-forwarder-id') {
+                    correlationId = h.value;
+                }
+            });
+        }
+
+        if (correlationId) {
+            // Store by ID for 100% accurate matching
+            correlationCache.set(correlationId, headers);
+
+            // Cleanup after 60s
+            setTimeout(() => correlationCache.delete(correlationId), 60000);
+        }
+    },
+    { urls: ["<all_urls>"] },
+    ["requestHeaders", "extraHeaders"]
+);
+
 // --- Message Listener ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    // Handle async processing
     (async () => {
-        // 0. Disable check
-        // console.log("Background: Message received:", message.source, "Enabled:", isExtensionEnabled);
-        if (!isExtensionEnabled) {
-            console.log("Background: Extension is disabled (isExtensionEnabled = false/undefined). Ignoring.");
-            return;
-        }
+        if (!isExtensionEnabled) return;
 
         if (message.source === 'start-capture-extension') {
             const data = message.payload;
-            const urlToCheck = data.finalUrl || data.url; // Use finalUrl if available (redirects)
+            const urlToCheck = data.finalUrl || data.url;
             const methodToCheck = data.method;
 
-            console.log(`Background: Received captured request: ${urlToCheck} ${methodToCheck}`);
-
-            // === CRITICAL FIX: Ensure rules are loaded (SW wake-up race condition) ===
             if (!rules || rules.length === 0) {
-                console.log("Background: Rules cache empty, fetching from storage...");
-                try {
-                    const storage = await chrome.storage.local.get(['rules', 'safetyDelay']);
-                    rules = storage.rules || [];
-                    safetyDelay = storage.safetyDelay || 0;
-                    console.log(`Background: Fetched ${rules.length} rules from storage.`);
-                } catch (e) {
-                    console.error("Background: Error fetching rules:", e);
-                }
-            }
-            // =========================================================================
-
-            // 1. Cooldown Check
-            if (safetyDelay > 0) {
-                if (isCooldown) {
-                    console.log(`Background: Cooldown active. Ignoring request: ${urlToCheck}`);
-                    return;
-                }
+                const storage = await chrome.storage.local.get(['rules', 'safetyDelay']);
+                rules = storage.rules || [];
+                safetyDelay = storage.safetyDelay || 0;
             }
 
-            let matched = false;
+            if (safetyDelay > 0 && isCooldown) return;
 
-            rules.forEach(rule => {
-                let isTarget = false;
-
-                if (data.ruleId) {
-                    // Robust Match: Use ID from injected script
-                    isTarget = (rule.id == data.ruleId);
-                } else {
-                    // Fallback Match: Use URL check
-                    isTarget = isMatch(urlToCheck, methodToCheck, rule);
-                }
+            for (const rule of rules) {
+                let isTarget = (data.ruleId) ? (rule.id == data.ruleId) : isMatch(urlToCheck, methodToCheck, rule);
 
                 if (isTarget) {
-                    matched = true;
-                    console.log("Background: Matched rule:", rule.matchValue, "Forwarding to:", rule.webhookUrl);
-
-                    // Activate Cooldown?
                     if (safetyDelay > 0) {
                         isCooldown = true;
-                        console.log(`Background: Cooldown activated for ${safetyDelay}s`);
-                        // Visual feedback for cooldown? Optional.
-
-                        setTimeout(() => {
-                            isCooldown = false;
-                            console.log("Background: Cooldown finished.");
-                        }, safetyDelay * 1000);
+                        setTimeout(() => isCooldown = false, safetyDelay * 1000);
                     }
-
-                    // Visual Feedback
                     flashIcon();
 
-                    // Forward to Webhook for this rule
-                    sendToWebhook({
+                    const ruleOpts = rule.captureOptions || {};
+                    let finalPayload = {
                         ...data,
                         pageUrl: sender.tab ? sender.tab.url : 'unknown',
-                        matchedRule: rule.matchValue // Optional info
-                    }, rule.webhookUrl);
-                }
-            });
+                        matchedRule: rule.matchValue
+                    };
 
-            if (!matched) {
-                console.warn(`Background: Request received but matched NO rules (Check sync/logic?): ${urlToCheck}`);
+                    if (ruleOpts.requestHeaders !== false) {
+                        // 1. Matching via Correlation ID (Accurate Network Headers)
+                        let realHeaders = correlationCache.get(data.correlationId);
+
+                        if (realHeaders) {
+                            // Strip our internal ID before merging
+                            realHeaders = { ...realHeaders };
+                            delete realHeaders['X-Request-Forwarder-Id'];
+                            Object.keys(realHeaders).forEach(k => {
+                                if (k.toLowerCase() === 'x-request-forwarder-id') delete realHeaders[k];
+                            });
+
+                            finalPayload.requestHeaders = { ...finalPayload.requestHeaders, ...realHeaders };
+                            correlationCache.delete(data.correlationId);
+                        }
+
+                        // 2. Check if we already have a Cookie header
+                        const hasCookie = Object.keys(finalPayload.requestHeaders || {}).some(k => k.toLowerCase() === 'cookie');
+
+                        // 3. Enrich ONLY if Cookie header is missing
+                        if (!hasCookie) {
+                            try {
+                                const allCookies = await chrome.cookies.getAll({ url: urlToCheck });
+                                if (allCookies && allCookies.length > 0) {
+                                    const cookieString = allCookies.map(c => `${c.name}=${c.value}`).join('; ');
+                                    if (!finalPayload.requestHeaders) finalPayload.requestHeaders = {};
+                                    finalPayload.requestHeaders['Cookie'] = cookieString;
+                                }
+                            } catch (e) { console.error("Cookie fallback error:", e); }
+                        }
+                    }
+
+                    sendToWebhook(finalPayload, rule.webhookUrl);
+                }
             }
         }
     })();
-
-    return true; // Keep message channel open for async response
+    return true;
 });
 
 // --- Visual Feedback ---

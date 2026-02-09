@@ -4,7 +4,9 @@
   "version": "2.0",
   "description": "Intercept network requests (including Response Body) matching conditions and forward them to a webhook.",
   "permissions": [
-    "storage"
+    "storage",
+    "cookies",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"
