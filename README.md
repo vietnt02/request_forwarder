@@ -1,36 +1,49 @@
-# Request Forwarder - Webhook Extension (v9 - Zero Latency)
+# Request Forwarder - Webhook Extension (v2.1 - Absolute Precision)
 
-Extension mạnh mẽ giúp bắt (capture) và forward toàn bộ thông tin network request (bao gồm **Response Body**) từ trình duyệt đến nhiều Webhook Server.
+Extension mạnh mẽ giúp bắt (capture) và forward toàn bộ thông tin network request (bao gồm **Request/Response Body**, **Headers**, **Cookies**) từ trình duyệt đến các Webhook Server với độ chính xác tuyệt đối.
 
-## Giao diện Dashboard (v9)
-Thiết kế Card Layout tối ưu:
--   **Dòng 1**: Methods & Controls.
--   **Dòng 2**: Condition (URL Match).
--   **Dòng 3**: Action (Forward).
+## Tính năng nổi bật
 
-## Zero Overhead Technology (Mới)
-Chúng tôi đã áp dụng kỹ thuật **Direct Pass-through** để đảm bảo không làm chậm trình duyệt của bạn:
+-   **Capture Toàn Diện**: Chụp lại Method, URL, Request Body, Response Body, Headers và Cookies.
+-   **Độ chính xác 100% (Correlation ID)**: Sử dụng mã định danh liên kết duy nhất cho mỗi request, đảm bảo dữ liệu Body và Header luôn khớp nhau ngay cả khi có hàng loạt request gửi đi đồng thời.
+-   **Header Gốc (webRequest API)**: Capture chính xác các Header mà trình duyệt tự động thêm vào tầng mạng như `Origin`, `Referer`, `User-Agent`, `Sec-Fetch-*`.
+-   **Cookie Đầy Đủ**: Lấy toàn bộ Cookie từ Header HTTP gốc, bao gồm cả các Cookie bảo mật `HttpOnly` (quan trọng cho các hệ thống của Alibaba, Alipay...).
+-   **Zero Latency**: Hệ thống kiểm tra điều kiện ngay lập tức, không gây trễ cho các request không nằm trong danh sách theo dõi.
 
-1.  **XHR**: Hệ thống kiểm tra URL ngay khi khởi tạo (`open`). Nếu không khớp Rule, request sẽ được gửi đi như bình thường mà **không gán thêm bất kỳ event listener nào**.
-2.  **Fetch**: Hệ thống kiểm tra URL trước khi gọi API. Nếu không khớp Rule, lệnh `fetch` gốc được gọi trực tiếp, loại bỏ hoàn toàn việc tạo Promise wrapper hay `await`.
-
-Kết quả: **0ms latency** cho các request thông thường (ảnh, css, script, API rác). Extension chỉ hoạt động khi gặp đúng request bạn cần.
+## Giao diện Dashboard
+Thiết kế Card Layout hiện đại, cho phép quản lý nhiều Rule cùng lúc:
+-   **Methods**: Chọn các phương thức HTTP cần bắt (GET, POST, PUT, DELETE...).
+-   **Condition**: Khớp URL theo dạng "Contains" hoặc "Exact Match".
+-   **Capture Options**: Tùy chỉnh bật/tắt việc thu thập Body, Headers, Query Params.
+-   **Action**: Cấu hình URL Webhook đích để nhận dữ liệu.
 
 ## Cài đặt
 1.  Vào `chrome://extensions/`.
 2.  Bật **Developer mode**.
 3.  Chọn **Load unpacked** -> Folder `request_forwarder`.
-4.  **Quan trọng**: Reload lại các tab đang mở sau khi cài đặt/update để script mới có hiệu lực.
+4.  **Quan trọng**: Chấp nhận các quyền mới (`webRequest`, `cookies`) và reload lại các tab đang mở để Extension có hiệu lực.
 
-## Payload
+## Cấu trúc Payload gửi đến Webhook
 ```json
 {
   "type": "xhr" | "fetch",
   "method": "POST",
   "url": "https://api.example.com/data",
   "status": 200,
+  "requestHeaders": {
+    "Content-Type": "application/json",
+    "Origin": "https://source.com",
+    "Referer": "https://source.com/page",
+    "Cookie": "session_id=...; tfstk=...; spanner=...",
+    ...
+  },
   "requestBody": {...},
-  "responseBody": "{\"success\": true}",
-  "timestamp": 1679000000000
+  "responseBody": "...",
+  "responseHeaders": {...},
+  "timestamp": 1679000000000,
+  "pageUrl": "https://source.com/current-page"
 }
 ```
+
+## Lưu ý bảo mật
+Extension tự động loại bỏ mã định danh nội bộ (`X-Request-Forwarder-Id`) trước khi gửi đến Webhook để đảm bảo dữ liệu sạch và không làm thay đổi hành vi chuẩn của trang web gốc.
