@@ -13,7 +13,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function loadRules() {
         chrome.storage.local.get(['rules'], (items) => {
-            rules = items.rules || [];
+            if (chrome.runtime.lastError) {
+                console.error('Failed to load rules:', chrome.runtime.lastError);
+                rules = [];
+                renderAll();
+                return;
+            }
+            rules = (items && Array.isArray(items.rules)) ? items.rules : [];
             renderAll();
         });
     }
@@ -131,6 +137,16 @@ document.addEventListener('DOMContentLoaded', () => {
             responseBody: true
         };
 
+        const dedupWarning = document.createElement('span');
+        dedupWarning.className = 'dedup-warning';
+        dedupWarning.textContent = 'cần bật Req Headers';
+
+        const updateDedupWarning = () => {
+            const hasDedup = typeof rule.dedupHeader === 'string' && rule.dedupHeader.trim() !== '';
+            const reqHeadersEnabled = !rule.captureOptions || rule.captureOptions.requestHeaders !== false;
+            dedupWarning.style.display = (hasDedup && !reqHeadersEnabled) ? 'inline' : 'none';
+        };
+
         const createCheckbox = (label, key) => {
             const lbl = document.createElement('label');
             lbl.className = 'checkbox-label';
@@ -141,6 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
             box.onchange = (e) => {
                 if (!rule.captureOptions) rule.captureOptions = { ...opts };
                 rule.captureOptions[key] = e.target.checked;
+                updateDedupWarning();
                 scheduleSave();
             };
 
@@ -159,7 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
         rowOptions.appendChild(checkboxGroup);
 
 
-        // --- Row 3: Action (Action Type + Target) ---
+        // --- Row 3: Action (Action Type + Target Webhook URL) ---
         const row3 = document.createElement('div');
         row3.className = 'card-row';
 
@@ -180,14 +197,65 @@ document.addEventListener('DOMContentLoaded', () => {
         inputWebhook.type = 'text';
         inputWebhook.className = 'input-control input-url';
         inputWebhook.placeholder = 'Target Webhook URL';
-        inputWebhook.value = rule.webhookUrl;
+        inputWebhook.value = rule.webhookUrl || '';
         inputWebhook.oninput = (e) => updateRule(rule.id, 'webhookUrl', e.target.value);
 
         row3.append(selectAction, inputWebhook);
 
-        row3.append(selectAction, inputWebhook);
 
-        card.append(row1, row2, rowOptions, row3);
+        // --- Row 4: Webhook Bearer Token ---
+        const row4 = document.createElement('div');
+        row4.className = 'card-row';
+
+        const tokenLabel = document.createElement('label');
+        tokenLabel.className = 'field-label';
+        tokenLabel.textContent = 'Webhook header  Authorization: Bearer';
+
+        const inputToken = document.createElement('input');
+        inputToken.type = 'password';
+        inputToken.className = 'input-control input-token';
+        inputToken.placeholder = 'token (để trống = không gửi header)';
+        inputToken.autocomplete = 'off';
+        inputToken.value = rule.webhookToken || '';
+        inputToken.oninput = (e) => updateRule(rule.id, 'webhookToken', e.target.value);
+
+        const toggleTokenBtn = document.createElement('button');
+        toggleTokenBtn.type = 'button';
+        toggleTokenBtn.className = 'btn-toggle-token';
+        toggleTokenBtn.textContent = 'Show';
+        toggleTokenBtn.title = 'Show/Hide Bearer Token';
+        toggleTokenBtn.onclick = () => {
+            const isHidden = inputToken.type === 'password';
+            inputToken.type = isHidden ? 'text' : 'password';
+            toggleTokenBtn.textContent = isHidden ? 'Hide' : 'Show';
+        };
+
+        row4.append(tokenLabel, inputToken, toggleTokenBtn);
+
+
+        // --- Row 5: Dedup by Request Header ---
+        const row5 = document.createElement('div');
+        row5.className = 'card-row';
+
+        const dedupLabel = document.createElement('label');
+        dedupLabel.className = 'field-label';
+        dedupLabel.textContent = 'Chỉ gửi khi request header này đổi giá trị:';
+
+        const inputDedupHeader = document.createElement('input');
+        inputDedupHeader.type = 'text';
+        inputDedupHeader.className = 'input-control input-dedup-header';
+        inputDedupHeader.placeholder = 'vd Authorization — để trống = gửi mọi lần';
+        inputDedupHeader.value = typeof rule.dedupHeader === 'string' ? rule.dedupHeader : '';
+        inputDedupHeader.oninput = (e) => {
+            updateRule(rule.id, 'dedupHeader', e.target.value);
+            updateDedupWarning();
+        };
+
+        updateDedupWarning();
+
+        row5.append(dedupLabel, inputDedupHeader, dedupWarning);
+
+        card.append(row1, row2, rowOptions, row3, row4, row5);
         rulesList.appendChild(card);
     }
 
@@ -202,6 +270,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function saveToStorage() {
         chrome.storage.local.set({ rules: rules }, () => {
+            if (chrome.runtime.lastError) {
+                console.error('Failed to save rules:', chrome.runtime.lastError);
+                return;
+            }
             showToast('Saved');
         });
     }
@@ -235,6 +307,11 @@ document.addEventListener('DOMContentLoaded', () => {
             rules = rules.filter(r => r.id !== id);
             renderAll();
             saveToStorage();
+            chrome.storage.local.remove(`dedupHash_${id}`, () => {
+                if (chrome.runtime.lastError) {
+                    console.error('Failed to remove dedup hash for deleted rule:', chrome.runtime.lastError);
+                }
+            });
         }
     }
 
@@ -245,6 +322,8 @@ document.addEventListener('DOMContentLoaded', () => {
             matchType: 'contains',
             matchValue: '',
             webhookUrl: '',
+            webhookToken: '',
+            dedupHeader: '',
             methods: [...DEFAULT_METHODS],
             actionType: 'forward',
             captureOptions: {
