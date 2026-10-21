@@ -13,7 +13,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function loadRules() {
         chrome.storage.local.get(['rules'], (items) => {
-            rules = items.rules || [];
+            if (chrome.runtime.lastError) {
+                console.error('Failed to load rules:', chrome.runtime.lastError);
+                rules = [];
+                renderAll();
+                return;
+            }
+            rules = (items && Array.isArray(items.rules)) ? items.rules : [];
             renderAll();
         });
     }
@@ -148,18 +154,29 @@ document.addEventListener('DOMContentLoaded', () => {
             return lbl;
         };
 
+        const dedupLabel = document.createElement('label');
+        dedupLabel.className = 'checkbox-label checkbox-dedup';
+
+        const dedupBox = document.createElement('input');
+        dedupBox.type = 'checkbox';
+        dedupBox.checked = rule.dedupBy === true; // Default false
+        dedupBox.onchange = (e) => updateRule(rule.id, 'dedupBy', e.target.checked);
+
+        dedupLabel.append(dedupBox, 'Only on Auth change');
+
         checkboxGroup.append(
             createCheckbox('Req Body', 'requestBody'),
             createCheckbox('Res Body', 'responseBody'),
             createCheckbox('Req Headers', 'requestHeaders'),
             createCheckbox('Res Headers', 'responseHeaders'),
-            createCheckbox('Query Params', 'queryParams')
+            createCheckbox('Query Params', 'queryParams'),
+            dedupLabel
         );
 
         rowOptions.appendChild(checkboxGroup);
 
 
-        // --- Row 3: Action (Action Type + Target) ---
+        // --- Row 3: Action (Action Type + Target + Bearer Token) ---
         const row3 = document.createElement('div');
         row3.className = 'card-row';
 
@@ -180,12 +197,35 @@ document.addEventListener('DOMContentLoaded', () => {
         inputWebhook.type = 'text';
         inputWebhook.className = 'input-control input-url';
         inputWebhook.placeholder = 'Target Webhook URL';
-        inputWebhook.value = rule.webhookUrl;
+        inputWebhook.value = rule.webhookUrl || '';
         inputWebhook.oninput = (e) => updateRule(rule.id, 'webhookUrl', e.target.value);
 
-        row3.append(selectAction, inputWebhook);
+        // Bearer Token Input (Password + Show/Hide Toggle)
+        const tokenGroup = document.createElement('div');
+        tokenGroup.className = 'token-input-group';
 
-        row3.append(selectAction, inputWebhook);
+        const inputToken = document.createElement('input');
+        inputToken.type = 'password';
+        inputToken.className = 'input-control input-token';
+        inputToken.placeholder = 'Bearer Token (optional)';
+        inputToken.autocomplete = 'off';
+        inputToken.value = rule.webhookToken || '';
+        inputToken.oninput = (e) => updateRule(rule.id, 'webhookToken', e.target.value);
+
+        const toggleTokenBtn = document.createElement('button');
+        toggleTokenBtn.type = 'button';
+        toggleTokenBtn.className = 'btn-toggle-token';
+        toggleTokenBtn.textContent = 'Show';
+        toggleTokenBtn.title = 'Show/Hide Bearer Token';
+        toggleTokenBtn.onclick = () => {
+            const isHidden = inputToken.type === 'password';
+            inputToken.type = isHidden ? 'text' : 'password';
+            toggleTokenBtn.textContent = isHidden ? 'Hide' : 'Show';
+        };
+
+        tokenGroup.append(inputToken, toggleTokenBtn);
+
+        row3.append(selectAction, inputWebhook, tokenGroup);
 
         card.append(row1, row2, rowOptions, row3);
         rulesList.appendChild(card);
@@ -202,6 +242,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function saveToStorage() {
         chrome.storage.local.set({ rules: rules }, () => {
+            if (chrome.runtime.lastError) {
+                console.error('Failed to save rules:', chrome.runtime.lastError);
+                return;
+            }
             showToast('Saved');
         });
     }
@@ -235,6 +279,11 @@ document.addEventListener('DOMContentLoaded', () => {
             rules = rules.filter(r => r.id !== id);
             renderAll();
             saveToStorage();
+            chrome.storage.local.remove(`dedupHash_${id}`, () => {
+                if (chrome.runtime.lastError) {
+                    console.error('Failed to remove dedup hash for deleted rule:', chrome.runtime.lastError);
+                }
+            });
         }
     }
 
@@ -245,6 +294,8 @@ document.addEventListener('DOMContentLoaded', () => {
             matchType: 'contains',
             matchValue: '',
             webhookUrl: '',
+            webhookToken: '',
+            dedupBy: false,
             methods: [...DEFAULT_METHODS],
             actionType: 'forward',
             captureOptions: {

@@ -256,6 +256,7 @@ input:checked+.slider:before {
 /* Checkbox Group for Capture Options */
 .checkbox-group {
     display: flex;
+    flex-wrap: wrap;
     gap: 15px;
     margin-left: 10px;
     align-items: center;
@@ -273,4 +274,42 @@ input:checked+.slider:before {
 
 .checkbox-label input {
     cursor: pointer;
+}
+
+.checkbox-dedup {
+    border-left: 1px solid #e0e0e0;
+    padding-left: 15px;
+    font-weight: 500;
+    color: #1565c0;
+}
+
+/* Bearer Token Input + Show/Hide Toggle */
+.token-input-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 240px;
+    flex-shrink: 0;
+}
+
+.input-token {
+    width: 100%;
+    min-width: 0;
+}
+
+.btn-toggle-token {
+    padding: 8px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #f9f9f9;
+    color: #555;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.btn-toggle-token:hover {
+    background: #eee;
+    border-color: #ccc;
 }

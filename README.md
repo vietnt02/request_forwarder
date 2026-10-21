@@ -15,7 +15,14 @@ Thiết kế Card Layout hiện đại, cho phép quản lý nhiều Rule cùng 
 -   **Methods**: Chọn các phương thức HTTP cần bắt (GET, POST, PUT, DELETE...).
 -   **Condition**: Khớp URL theo dạng "Contains" hoặc "Exact Match".
 -   **Capture Options**: Tùy chỉnh bật/tắt việc thu thập Body, Headers, Query Params.
--   **Action**: Cấu hình URL Webhook đích để nhận dữ liệu.
+-   **Only on Auth change (`dedupBy`)**: Mặc định tắt. Khi bật, trước khi gửi request tới Webhook, Extension tính mã băm SHA-256 (`crypto.subtle.digest`) của giá trị header `Authorization` trong `requestHeaders` (không phân biệt hoa/thường; nếu request không có header `Authorization` thì vẫn gửi bình thường) và so sánh với mã băm của lần gửi thành công (HTTP 2xx) liền trước của chính Rule đó trong `chrome.storage.local` (chỉ lưu hash theo `rule.id`, không lưu giá trị gốc). Nếu trùng hash thì bỏ qua không gửi lặp; nếu gửi lỗi (mạng hoặc HTTP khác 2xx) thì không cập nhật hash để lần sau thử lại. Khi xoá Rule, hash của Rule đó cũng được xoá.
+-   **Action**: Cấu hình URL Webhook đích (`webhookUrl`) và **Bearer Token (`webhookToken`)** tùy chọn (ô nhập kiểu password có nút `Show`/`Hide`). Khi `webhookToken` khác rỗng, request POST tới Webhook sẽ đính kèm header `Authorization: Bearer <webhookToken>` (không ghi token ra console). Các Rule cũ không có trường này vẫn hoạt động bình thường.
+
+## Ví dụ cấu hình cho Hook Airflow (PingPong Session)
+-   **Condition**: `URL Contains` → `/api/` (hoặc endpoint API của PingPong cần theo dõi).
+-   **Capture Options**: Bật `Req Headers` và bật **Only on Auth change** (`dedupBy = true`).
+-   **Target Webhook URL**: `https://airflow.topasglobal.com/hooks/pingpong-session`
+-   **Bearer Token**: `<YOUR_AIRFLOW_WEBHOOK_BEARER_TOKEN>` (nhập token xác thực của hook Airflow, không commit token thật).
 
 ## Cài đặt
 1.  Vào `chrome://extensions/`.

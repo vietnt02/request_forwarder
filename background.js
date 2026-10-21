@@ -9,6 +9,10 @@ let isCooldown = false;
 
 // Load initial settings
 chrome.storage.local.get(['rules', 'webhookUrl', 'matchType', 'matchValue', 'isExtensionEnabled', 'safetyDelay'], (items) => {
+    if (chrome.runtime.lastError) {
+        console.error("Background: Failed to load initial settings:", chrome.runtime.lastError);
+        return;
+    }
     isExtensionEnabled = items.isExtensionEnabled !== false;
     safetyDelay = items.safetyDelay || 0;
 
@@ -34,8 +38,21 @@ chrome.storage.local.get(['rules', 'webhookUrl', 'matchType', 'matchValue', 'isE
 chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local') {
         if (changes.rules) {
-            rules = changes.rules.newValue;
-            console.log("Background: Rules updated:", rules);
+            const oldRules = Array.isArray(changes.rules.oldValue) ? changes.rules.oldValue : [];
+            rules = Array.isArray(changes.rules.newValue) ? changes.rules.newValue : [];
+            console.log("Background: Rules updated:", rules.length);
+
+            const newIds = new Set(rules.map(r => r && r.id));
+            const removedHashKeys = oldRules
+                .filter(r => r && r.id !== undefined && r.id !== null && !newIds.has(r.id))
+                .map(r => getDedupStorageKey(r.id));
+            if (removedHashKeys.length > 0) {
+                chrome.storage.local.remove(removedHashKeys, () => {
+                    if (chrome.runtime.lastError) {
+                        console.error("Background: Failed to remove dedup hash for deleted rules:", chrome.runtime.lastError);
+                    }
+                });
+            }
         }
         if (changes.isExtensionEnabled) {
             isExtensionEnabled = changes.isExtensionEnabled.newValue;
@@ -49,6 +66,29 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
         }
     }
 });
+
+function getDedupStorageKey(ruleId) {
+    return `dedupHash_${ruleId}`;
+}
+
+function getAuthorizationHeader(headers) {
+    if (!headers || typeof headers !== 'object') return null;
+    for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === 'authorization') {
+            const val = headers[key];
+            return (typeof val === 'string' && val.length > 0) ? val : null;
+        }
+    }
+    return null;
+}
+
+async function computeSha256Hex(value) {
+    const encoded = new TextEncoder().encode(value);
+    const digest = await crypto.subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(digest))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+}
 
 // Helper to check match against a specific rule
 function isMatch(url, method, rule) {
@@ -116,9 +156,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const methodToCheck = data.method;
 
             if (!rules || rules.length === 0) {
-                const storage = await chrome.storage.local.get(['rules', 'safetyDelay']);
-                rules = storage.rules || [];
-                safetyDelay = storage.safetyDelay || 0;
+                try {
+                    const storage = await chrome.storage.local.get(['rules', 'safetyDelay']);
+                    rules = storage.rules || [];
+                    safetyDelay = storage.safetyDelay || 0;
+                } catch (err) {
+                    console.error("Background: Failed to load rules from storage:", err);
+                    return;
+                }
             }
 
             if (safetyDelay > 0 && isCooldown) return;
@@ -127,12 +172,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 let isTarget = (data.ruleId) ? (rule.id == data.ruleId) : isMatch(urlToCheck, methodToCheck, rule);
 
                 if (isTarget) {
-                    if (safetyDelay > 0) {
-                        isCooldown = true;
-                        setTimeout(() => isCooldown = false, safetyDelay * 1000);
-                    }
-                    flashIcon();
-
                     const ruleOpts = rule.captureOptions || {};
                     let finalPayload = {
                         ...data,
@@ -172,7 +211,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         }
                     }
 
-                    sendToWebhook(finalPayload, rule.webhookUrl);
+                    let authHash = null;
+                    const hasRuleId = rule.id !== undefined && rule.id !== null;
+                    if (rule.dedupBy === true && hasRuleId) {
+                        const authHeader = getAuthorizationHeader(finalPayload.requestHeaders);
+                        if (authHeader !== null) {
+                            try {
+                                authHash = await computeSha256Hex(authHeader);
+                                const storageKey = getDedupStorageKey(rule.id);
+                                const stored = await chrome.storage.local.get([storageKey]);
+                                if (stored && stored[storageKey] === authHash) {
+                                    console.log(`Background: Skipped forwarding [${urlToCheck}] for rule [${rule.id}] (Authorization session unchanged).`);
+                                    continue;
+                                }
+                            } catch (err) {
+                                console.error("Background: Failed to read or compute dedup hash:", err);
+                            }
+                        }
+                    }
+
+                    if (safetyDelay > 0) {
+                        isCooldown = true;
+                        setTimeout(() => isCooldown = false, safetyDelay * 1000);
+                    }
+                    flashIcon();
+
+                    const sentOk = await sendToWebhook(finalPayload, rule.webhookUrl, rule.webhookToken);
+                    if (sentOk && authHash !== null && hasRuleId) {
+                        try {
+                            const storageKey = getDedupStorageKey(rule.id);
+                            await chrome.storage.local.set({ [storageKey]: authHash });
+                        } catch (err) {
+                            console.error("Background: Failed to store dedup hash:", err);
+                        }
+                    }
                 }
             }
         }
@@ -195,20 +267,31 @@ function flashIcon(tabId) {
     }, 3000);
 }
 
-async function sendToWebhook(payload, webhookUrl) {
-    if (!webhookUrl) return;
+async function sendToWebhook(payload, webhookUrl, webhookToken) {
+    if (!webhookUrl) return false;
+
+    const headers = {
+        "Content-Type": "application/json"
+    };
+    if (typeof webhookToken === 'string' && webhookToken.trim() !== '') {
+        headers["Authorization"] = `Bearer ${webhookToken.trim()}`;
+    }
 
     try {
         const response = await fetch(webhookUrl, {
             method: "POST", // Force POST
-            headers: {
-                "Content-Type": "application/json"
-            },
+            headers: headers,
             body: JSON.stringify(payload)
         });
         console.log(`Background: Forwarded [${payload.url}] -> [${webhookUrl}]. Status: ${response.status}`);
+        if (!response.ok) {
+            console.error(`Background: Webhook returned non-2xx status: ${response.status}`);
+            return false;
+        }
+        return true;
     } catch (err) {
         console.error("Background: Failed to forward request to webhook:", err);
+        return false;
     }
 }
 

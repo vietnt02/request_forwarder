@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Request Forwarder",
-  "version": "2.0",
+  "version": "2.1",
   "description": "Intercept network requests (including Response Body) matching conditions and forward them to a webhook.",
   "permissions": [
     "storage",
