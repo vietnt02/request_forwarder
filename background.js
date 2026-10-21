@@ -71,10 +71,11 @@ function getDedupStorageKey(ruleId) {
     return `dedupHash_${ruleId}`;
 }
 
-function getAuthorizationHeader(headers) {
-    if (!headers || typeof headers !== 'object') return null;
+function getHeaderValue(headers, headerName) {
+    if (!headers || typeof headers !== 'object' || !headerName) return null;
+    const target = headerName.toLowerCase();
     for (const key of Object.keys(headers)) {
-        if (key.toLowerCase() === 'authorization') {
+        if (key.toLowerCase() === target) {
             const val = headers[key];
             return (typeof val === 'string' && val.length > 0) ? val : null;
         }
@@ -211,17 +212,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         }
                     }
 
-                    let authHash = null;
+                    let dedupState = null;
                     const hasRuleId = rule.id !== undefined && rule.id !== null;
-                    if (rule.dedupBy === true && hasRuleId) {
-                        const authHeader = getAuthorizationHeader(finalPayload.requestHeaders);
-                        if (authHeader !== null) {
+                    const dedupHeaderName = (typeof rule.dedupHeader === 'string') ? rule.dedupHeader.trim() : '';
+                    if (dedupHeaderName !== '' && ruleOpts.requestHeaders !== false && hasRuleId) {
+                        const targetHeader = dedupHeaderName.toLowerCase();
+                        const headerVal = getHeaderValue(finalPayload.requestHeaders, targetHeader);
+                        if (headerVal !== null) {
                             try {
-                                authHash = await computeSha256Hex(authHeader);
+                                const headerHash = await computeSha256Hex(headerVal);
+                                dedupState = { header: targetHeader, hash: headerHash };
                                 const storageKey = getDedupStorageKey(rule.id);
                                 const stored = await chrome.storage.local.get([storageKey]);
-                                if (stored && stored[storageKey] === authHash) {
-                                    console.log(`Background: Skipped forwarding [${urlToCheck}] for rule [${rule.id}] (Authorization session unchanged).`);
+                                const prev = stored && stored[storageKey];
+                                if (prev && prev.header === targetHeader && prev.hash === headerHash) {
+                                    console.log(`Background: Skipped forwarding [${urlToCheck}] for rule [${rule.id}] (header "${dedupHeaderName}" unchanged).`);
                                     continue;
                                 }
                             } catch (err) {
@@ -237,10 +242,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     flashIcon();
 
                     const sentOk = await sendToWebhook(finalPayload, rule.webhookUrl, rule.webhookToken);
-                    if (sentOk && authHash !== null && hasRuleId) {
+                    if (sentOk && dedupState !== null && hasRuleId) {
                         try {
                             const storageKey = getDedupStorageKey(rule.id);
-                            await chrome.storage.local.set({ [storageKey]: authHash });
+                            await chrome.storage.local.set({ [storageKey]: dedupState });
                         } catch (err) {
                             console.error("Background: Failed to store dedup hash:", err);
                         }
